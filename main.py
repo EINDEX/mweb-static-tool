@@ -1,25 +1,13 @@
 import datetime
 import copy
+from pathlib import Path
+
+import fire
 from sqlalchemy import create_engine
 
 from models import Tag, Cat, Article, CatArticle, TagArticle
 from sqlalchemy.orm import sessionmaker
 from dataclasses import dataclass, field
-
-engine = create_engine('sqlite:///mainlib.db')
-Session = sessionmaker(bind=engine)
-
-# 缓存
-cats = {}
-tags = {}
-md_list = []
-
-
-def init():
-    global cats, tags
-    session = Session()
-    tags = {tag.tid: tag for tag in session.query(Tag)}
-    cats = {cat.uuid: cat for cat in session.query(Cat)}
 
 
 @dataclass
@@ -53,12 +41,31 @@ class HexoSource:
         return output
 
 
-def gene_all_hexo_source_by_name(name):
-    global md_list
-    session = Session()
-    main_cat = session.query(Cat).filter_by(name=name).first()
+class MwebSiteHelper:
 
-    def get_all_article_by_id(uuid, cat_list):
+    def __init__(self, site_name, hexo_src, mweb_src):
+        self.site_name = site_name
+        self.hexo_src = Path(hexo_src)
+        self.mweb_src = Path(mweb_src)
+        print(f'sqlite:///{self.mweb_src.expanduser()}/mainlib.db')
+        engine = create_engine(f'sqlite:///{self.mweb_src.expanduser()}/mainlib.db')
+        self.Session = sessionmaker(bind=engine)
+
+        self.cats = {}
+        self.tags = {}
+        self.md_list = []
+
+        self.init()
+        self.gene_all_hexo_source_by_name(site_name)
+        self.write()
+
+    def init(self):
+        session = self.Session()
+        self.tags = {tag.tid: tag for tag in session.query(Tag)}
+        self.cats = {cat.uuid: cat for cat in session.query(Cat)}
+
+    def get_all_article_by_id(self, uuid, cat_list):
+        session = self.Session()
         if not cat_list:
             cat_list = []
         for cat in session.query(Cat).filter_by(uuid=uuid):
@@ -70,9 +77,9 @@ def gene_all_hexo_source_by_name(name):
                     source.date = a.dateAdd
                     source.updated = a.dateModif
                     source.permalink = a.docName if a.docName else a.uuid
-                    source.tags = [tags[t.rid].name for t in session.query(TagArticle).filter_by(aid=a.uuid)]
+                    source.tags = [self.tags[t.rid].name for t in session.query(TagArticle).filter_by(aid=a.uuid)]
                     source.categories = cat_list
-                    with open(f'docs/{a.uuid}.md', 'r') as f:
+                    with open(f'{self.mweb_src}/docs/{a.uuid}.md', 'r') as f:
                         start = True
                         for line in f.readlines():
                             if line.startswith('# ') and start:
@@ -80,27 +87,31 @@ def gene_all_hexo_source_by_name(name):
                                 source.title = line.replace('# ', '').strip()
                             elif not start:
                                 source.content += line
-                    print(source)
-                    md_list.append(source)
+                    self.md_list.append(source)
         for sub_cat in session.query(Cat).filter_by(pid=uuid):
             c_list = copy.copy(cat_list)
             c_list.append(sub_cat.name)
-            get_all_article_by_id(sub_cat.uuid, c_list)
+            self.get_all_article_by_id(sub_cat.uuid, c_list)
 
-    get_all_article_by_id(main_cat.uuid, [])
+    def gene_all_hexo_source_by_name(self, name):
+        session = self.Session()
+        main_cat = session.query(Cat).filter_by(name=name).first()
 
+        self.get_all_article_by_id(main_cat.uuid, [])
 
-def gene_new_markdowns(md_list):
-    for md in md_list:
-        if md.layout == 'post':
-            with open(f'hexo/source/_posts/{md.permalink}.md', 'w') as f:
-                f.write(md.format())
-        elif md.layout == 'page':
-            with open(f'hexo/source/{md.permalink}.md', 'w') as f:
-                f.write(md.format())
+    def write(self):
+        for md in self.md_list:
+
+            if md.layout == 'post':
+                with open(f'{self.hexo_src}/source/_posts/{md.permalink}.md', 'w') as f:
+                    f.write(md.format())
+            elif md.layout == 'page':
+                with open(f'{self.hexo_src}/source/{md.permalink}.md', 'w') as f:
+                    f.write(md.format())
+            print(f'Write {md.title}')
+
+        print('Done!')
 
 
 if __name__ == '__main__':
-    init()
-    gene_all_hexo_source_by_name('eindex.me')
-    gene_new_markdowns(md_list)
+    fire.Fire(MwebSiteHelper)
